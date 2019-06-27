@@ -1,5 +1,5 @@
 choose_lambdas <- function(dat, q, lams, lam_grid, prop_miss = 0.05, trcma = T, maxit = 20,
-                           greedy.search = F, maxit.search = 5, save.filepath, save.fileext = "", seed = 100) {
+                           greedy.search = T, maxit.search = 1, save.filepath, save.fileext = "", seed = 100) {
   # choose_lambdas: function to choose penalty parameters via ECM-type algorithm
   #
   # Inputs:
