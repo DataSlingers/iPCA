@@ -1,10 +1,10 @@
-choose_lambdas <- function(dat, q, lams, lam_grid, prop_miss = 0.05, trcma = T, maxit = 20,
-                           greedy.search = T, maxit.search = 1, save.filepath, save.fileext = "", seed = 100) {
+choose_lambdas <- function(draw, dat, q, lams, lam_grid, prop_miss = 0.05, trcma = T, maxit = 20,
+                           greedy.search = F, maxit.search = 5, save.filepath, save.fileext = "", seed = 100) {
   # choose_lambdas: function to choose penalty parameters via ECM-type algorithm
   #
   # Inputs:
   #  -dat = list of K data matrices (centered or uncentered)
-  #  -q = type of penalty, either 1, addfrob, or multfrob
+  #  -q = type of penalty, 1, 1_off, corr1_off, addfrob, or multfrob
   #  -lams = (optional) vector of possible lams to use for construction of lam_grid
   #  -lam_grid = grid of penalty parameters to try; each row is a set of penalty parameters to try;
   #              lamS (if needed) must be in the first column, followed by lamDs
@@ -27,7 +27,11 @@ choose_lambdas <- function(dat, q, lams, lam_grid, prop_miss = 0.05, trcma = T, 
     set.seed(seed)
   # }
   
-  Xs <- dat
+  if (!(missing(dat))) {
+    Xs <- dat
+  }else {
+    Xs <- draw$sim_data
+  }
   
   # record dimensions
   n <- nrow(Xs[[1]])
@@ -45,15 +49,19 @@ choose_lambdas <- function(dat, q, lams, lam_grid, prop_miss = 0.05, trcma = T, 
   
   if (!missing(save.filepath)) {
     saveRDS(Xmiss, file = paste0(save.filepath, "Xmiss", save.fileext, ".rds"))
-    saveRDS(lam_grid, file = paste0(save.filepath, "lam_grid", save.fileext, ".rds"))
+    if (!missing(lam_grid)) {
+      saveRDS(lam_grid, file = paste0(save.filepath, "lam_grid", save.fileext, ".rds"))
+    }else {
+      saveRDS(lams, file = paste0(save.filepath, "lams", save.fileext, ".rds"))
+    }
   }
   
   if (!missing(lam_grid)) {
-    err <- rep(NA,nrow(lam_grid))
+    like <- err <- rep(NA,nrow(lam_grid))
     errs <- matrix(NA, nrow = nrow(lam_grid), ncol = K)
     Xdiff <- list()
   }else {
-    err <- NA
+    like <- err <- NA
     errs <- matrix(NA, nrow = 1, ncol = K)
     Xdiff <- list()
   }
@@ -69,11 +77,11 @@ choose_lambdas <- function(dat, q, lams, lam_grid, prop_miss = 0.05, trcma = T, 
       if (q == "multfrob" & ncol(lam_grid) == K) {
         lamS <- NULL
         lamDs <- lambdas
-      }else if ((q == 1 | q == "1_off" | q == "addfrob") & ncol(lam_grid) == K+1) {
+      }else if ((q == 1 | q == "1_off" | q == "addfrob" | q == "corr1_off") & ncol(lam_grid) == K+1) {
         lamS <- lambdas[1]
         lamDs <- lambdas[-1]
       }else {
-        stop("q must be either 1, 1_off, addfrob, or multfrob, and check the number of penalty parameters.")
+        stop("q must be either 1, 1_off, corr1_off, addfrob, or multfrob, and check the number of penalty parameters.")
       }
       
       if (trcma) {
@@ -118,7 +126,8 @@ choose_lambdas <- function(dat, q, lams, lam_grid, prop_miss = 0.05, trcma = T, 
     best_lambdas <- lam_grid[which.min(err),]
     errs_tab <- errs
     errs <- err
-
+    loglike <- like
+    
   }else { # do greedy search
     if (!missing(lam_grid)) {
       lams <- list()
@@ -150,7 +159,7 @@ choose_lambdas <- function(dat, q, lams, lam_grid, prop_miss = 0.05, trcma = T, 
           if (q == "multfrob" & length(best_lambdas) == K) {
             lamS <- NULL
             lamDs <- lambdas
-          }else if ((q == 1 | q == "1_off" | q == "addfrob") & length(best_lambdas) == K+1) {
+          }else if ((q == 1 | q == "1_off" | q == "addfrob" | q == "corr1_off") & length(best_lambdas) == K+1) {
             lamS <- lambdas[1]
             lamDs <- lambdas[-1]
           }else {
@@ -230,8 +239,9 @@ choose_lambdas <- function(dat, q, lams, lam_grid, prop_miss = 0.05, trcma = T, 
     lam_grid <- already_searched[,-1]
     errs_tab <- errs
     errs <- rowSums(errs)
-
+    loglike <- like
+    
   }
   
-  return(list(best_lambdas = best_lambdas, errs = errs, errs_tab = errs_tab, lam_grid = lam_grid, Xmiss = Xmiss))
+  return(list(best_lambdas = best_lambdas, errs = errs, errs_tab = errs_tab, loglike = loglike, lam_grid = lam_grid, Xmiss = Xmiss))
 }

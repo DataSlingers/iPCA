@@ -4,30 +4,32 @@ library(R.matlab)
 library(randomForest)
 library(R.utils)
 library(plotly)
-
 library(foreach)
 library(doParallel)
+library(SpatioTemporal)
+library(stringr)
 
 sourceDirectory("../functions/", modifiedOnly = F, recursive = F) # useful functions
 
 #### ####
-#### Default iPCA Simulation - vary K ####
+#### Small Sparse iPCA Simulation - vary number of blocks/sparsity in sigma ####
 nsim <- 50
-param_name <- "K"
-params <- c(2, 3, 5, 10)
+param_name <- "n_blks_Sig"
+params <- c(2, 4, 6, 8, 10, 15)
 
-avg_err_df <- as.data.frame(matrix(NA, nrow = 7, ncol = length(params)))
+avg_err_df <- as.data.frame(matrix(NA, nrow = 9, ncol = length(params)))
 colnames(avg_err_df) <- params
-rownames(avg_err_df) <- c("concatenated", "distributed",
-                          "mfa", "jive", "addfrob", "multfrob", "l1")
+rownames(avg_err_df) <- c("pca1", "pca2", "concatenated",
+                          "mfa", "jive", "addfrob", "multfrob", "l1", "l1_corr")
+
 for (param in params) {
   # make sims data
-  sims <- ipca_base_sim(nsim = nsim, cov_types = "random", K = param)
-  # saveRDS(sims, paste0("./vary_", param_name, "_sim/sims_", param_name, "_", param, ".rds"))
+  sims <- sparse_ipca_model(nsim = nsim, n_blks_Sig = param)
   
-  metric_df <- data.frame(concatenated = NULL, distributed = NULL, mfa = NULL,
+  metric_df <- data.frame(pca1 = NULL, pca2 = NULL, 
+                          concatenated = NULL, mfa = NULL,
                           jive = NULL, addfrob = NULL, multfrob = NULL, 
-                          l1 = NULL)
+                          l1 = NULL, l1_corr = NULL)
   for (i in 1:nsim) {
     sim <- sims[[i]]
     sim_data <- sim$sim_data
@@ -38,18 +40,21 @@ for (param in params) {
     # initialize list for Sighs
     Sigh_ls <- list()
     
+    # individual PCAs
+    for (k in 1:length(sim_data)) {
+      pca_name <- paste0("pca", k)
+      Sigh_ls[[pca_name]] <- IndividualPCA(dat = sim_data, k = k)$Sig
+      metric_df[i, pca_name] <- subspace_recovery(Sig = Sig_true, 
+                                                  Sigh = Sigh_ls[[pca_name]], 
+                                                  dim_U = dim_U)
+    }
+    
     # concatenated PCA
     Sigh_ls[["concatenated"]] <- ConcatenatedPCA(dat = sim_data)$Sig
     metric_df[i, "concatenated"] <- subspace_recovery(Sig = Sig_true,
                                                       Sigh = Sigh_ls[["concatenated"]],
                                                       dim_U = dim_U)
-
-    # distributed PCA
-    Sigh_ls[["distributed"]] <- DistributedPCA(dat = sim_data)$Sig
-    metric_df[i, "distributed"] <- subspace_recovery(Sig = Sig_true,
-                                                     Sigh = Sigh_ls[["distributed"]],
-                                                     dim_U = dim_U)
-
+    
     # MFA
     Sigh_ls[["mfa"]] <- my_MFA(dat = sim_data)$U
     metric_df[i, "mfa"] <- subspace_recovery(Sig = Sig_true,
@@ -64,8 +69,9 @@ for (param in params) {
     
     # Addfrob
     # to reduce computational time, make lam_grid smaller and choose fewer lams
-    lams <- c(1e-4, 1e-2, 1, 10, 100, 1000) # for additive penalties
-    choose_lambdas_ans <- choose_lambdas(dat = sim_data, lams = lams, 
+    lams <- c(1e-4, 1e-2, 1, 100, 1000, 10000, 100000) # for additive penalties
+    lam_grid <- expand.grid(lams, lams, lams)
+    choose_lambdas_ans <- choose_lambdas(dat = sim_data, lam_grid = lam_grid, 
                                          q = "addfrob", trcma = T, maxit = 10, 
                                          greedy.search = T, maxit.search = 1,
                                          seed = sample(x = 1:10000, 1))
@@ -79,9 +85,9 @@ for (param in params) {
     
     # Multfrob
     # to reduce computational time, make lam_grid smaller and choose fewer lams
-    lams <- c(1e-4, 1e-2, 1, 10, 100, 1000) # for multiplicative penalties
-    lam_grid <- expand.grid(lams, lams, lams)
-    choose_lambdas_ans <- choose_lambdas(dat = sim_data, lams = lams, 
+    lams <- c(1e-4, 1e-2, 1, 10, 100, 1000, 10000) # for multiplicative penalties
+    lam_grid <- expand.grid(lams, lams)
+    choose_lambdas_ans <- choose_lambdas(dat = sim_data, lam_grid = lam_grid, 
                                          q = "multfrob", trcma = T, maxit = 10, 
                                          greedy.search = T, maxit.search = 1,
                                          seed = sample(x = 1:10000, 1))
@@ -94,9 +100,9 @@ for (param in params) {
     
     # L1
     # to reduce computational time, make lam_grid smaller and choose fewer lams
-    lams <- c(1e-4, 1e-2, 1, 10, 100, 1000) # for additive penalties
-    lam_grid <- expand.grid(lams, lams, lams, lams)
-    choose_lambdas_ans <- choose_lambdas(dat = sim_data, lams = lams, 
+    lams <- c(1e-4, 1e-2, 1, 100, 1000, 10000, 100000) # for additive penalties
+    lam_grid <- expand.grid(lams, lams, lams)
+    choose_lambdas_ans <- choose_lambdas(dat = sim_data, lam_grid = lam_grid, 
                                          q = "1_off", trcma = T, maxit = 10, 
                                          greedy.search = T, maxit.search = 1,
                                          seed = sample(x = 1:10000, 1))
@@ -108,13 +114,27 @@ for (param in params) {
     metric_df[i, "l1"] <- subspace_recovery(Sig = Sig_true,
                                             Sigh = Sigh_ls[["l1"]],
                                             dim_U = dim_U)
-    
-    # saveRDS(metric_df, paste0("./vary_", param_name, "_sim/evals_", param_name, "_", param, ".rds"))
+    # L1 on correlation matrix
+    # to reduce computational time, make lam_grid smaller and choose fewer lams
+    lams <- c(1e-4, 1e-2, 1, 100, 1000, 10000, 100000) # for additive penalties
+    lam_grid <- expand.grid(lams, lams, lams)
+    choose_lambdas_ans <- choose_lambdas(dat = sim_data, lam_grid = lam_grid, 
+                                         q = "corr1_off", trcma = T, maxit = 10, 
+                                         greedy.search = T, maxit.search = 1,
+                                         seed = sample(x = 1:10000, 1))
+    best_lambdas <- choose_lambdas_ans$best_lambdas
+    Sigh_ls[["l1_corr"]] <- FFmleGlassoCorrelation(dat = sim_data, 
+                                                   lamDs = best_lambdas[-1],
+                                                   lamS = best_lambdas[1],
+                                                   maxit = 1, pen_diag = F)$Sig
+    metric_df[i, "l1_corr"] <- subspace_recovery(Sig = Sig_true,
+                                            Sigh = Sigh_ls[["l1_corr"]],
+                                            dim_U = dim_U)
   }
   
   avg_err_df[as.character(param)] <- colMeans(metric_df)
-  # saveRDS(avg_err_df, paste0("./vary_", param_name, "_sim/errs_df.rds"))
 }
+
 
 avg_err_df <- cbind(method = rownames(avg_err_df), avg_err_df)
 plt_df <- melt(avg_err_df, id.vars = "method")

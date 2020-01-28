@@ -31,7 +31,6 @@ RMNimpute_iPCA <- function(x, lamS, lamDs, q, cov.init, xhat.init, Mhat.init,
   pks <- sapply(x, FUN = ncol)
   p <- sum(pks)
   K <- length(x)
-  n_cores <- K
   set.seed(seed)
   
   # estimate column means
@@ -57,12 +56,13 @@ RMNimpute_iPCA <- function(x, lamS, lamDs, q, cov.init, xhat.init, Mhat.init,
   Sighat <- cov.init[[1]]
   Sigihat <- chol2inv(chol(Sighat))
   Delthats <- cov.init[2:(K+1)]
-  Deltihats <- mclapply(X = Delthats, FUN = function(X) {chol2inv(chol(X))}, mc.cores = n_cores) # invert Deltis
+  Deltihats <- lapply(X = Delthats, FUN = function(X) {chol2inv(chol(X))}) # invert Deltis
   
-  like <- NA
+  like <- like2 <- NA
   if (trace) {
     cat("Computing loglike... ")
     like[1] <- MNloglike_iPCA(Xs = x, Ms = Mhat, Sig = Sighat, Delts = Delthats, lamS = lamS, lamDs = lamDs, q = q, print = T)
+    like2[1] <- MNloglike_iPCA(Xs = xhat, Ms = Mhat, Sig = Sighat, Delts = Delthats, lamS = lamS, lamDs = lamDs, q = q, print = T)
     like_idx <- 2
   }
   
@@ -108,9 +108,9 @@ RMNimpute_iPCA <- function(x, lamS, lamDs, q, cov.init, xhat.init, Mhat.init,
     muhat <- lapply(X = xhc, FUN = function(X) {return(attr(X, "scaled:center"))}) # estimated column means
     Mhat <- lapply(muhat, FUN = function(X) {return(matrix(rep(X, times = n), nrow = n, byrow = T))})
     
-    inS <- Reduce("+", mcmapply(X = xhc, D = Deltihats, C = covcorrs,
+    inS <- Reduce("+", mapply(X = xhc, D = Deltihats, C = covcorrs,
                                 FUN = function(X,D,C) {return(X %*% D %*% t(X) + C)},
-                                SIMPLIFY = FALSE, mc.cores = n_cores))
+                                SIMPLIFY = FALSE))
     
     # update Sig
     if (q == 1) {
@@ -172,23 +172,23 @@ RMNimpute_iPCA <- function(x, lamS, lamDs, q, cov.init, xhat.init, Mhat.init,
     muhat <- lapply(X = xhc, FUN = function(X) {return(attr(X, "scaled:center"))}) # estimated column means
     Mhat <- lapply(muhat, FUN = function(X) {return(matrix(rep(X, times = n), nrow = n, byrow = T))})
     
-    inD <- mcmapply(X = xhc, C = covcorcs, 
+    inD <- mapply(X = xhc, C = covcorcs,
                     FUN = function(X,C) {return(t(X) %*% Sigihat %*% X + C)},
-                    SIMPLIFY = FALSE, mc.cores = n_cores)
+                    SIMPLIFY = FALSE)
     
     # update all Deltks in parallel
     if (q == 1) {
-      quic_res <- mcmapply(D = inD, Rho = as.list(lamDs), XInit = Deltihats, WInit = Delthats,
+      quic_res <- mapply(D = inD, Rho = as.list(lamDs), XInit = Deltihats, WInit = Delthats,
                            FUN = function(D, Rho, XInit, WInit) {
                              return(QUIC(S = D/n, rho = Rho/(2*n), tol = 1e-2, msg = 0,
                                          X.init = XInit, W.init = WInit))},
-                           SIMPLIFY = FALSE, mc.cores = n_cores)
-      Deltihats <- mclapply(X = quic_res, FUN = function(X) {return(X$X)}, mc.cores = n_cores)
-      Delthats <- mclapply(X = quic_res, FUN = function(X) {return(X$W)}, mc.cores = n_cores)
+                           SIMPLIFY = FALSE)
+      Deltihats <- lapply(X = quic_res, FUN = function(X) {return(X$X)})
+      Delthats <- lapply(X = quic_res, FUN = function(X) {return(X$W)})
     }else if (q == "addfrob") {
-      Delt_eigs <- mclapply(X = inD, FUN = eigen, mc.cores = n_cores)
-      Delt_Vs <- mclapply(X = Delt_eigs, FUN = function(X) {return(X$vectors)}, mc.cores = n_cores)
-      Delt_ds <- mclapply(X = Delt_eigs, FUN = function(X) {return(X$values)}, mc.cores = n_cores)
+      Delt_eigs <- lapply(X = inD, FUN = eigen)
+      Delt_Vs <- lapply(X = Delt_eigs, FUN = function(X) {return(X$vectors)})
+      Delt_ds <- lapply(X = Delt_eigs, FUN = function(X) {return(X$values)})
       for (k in 1:K) {
         d <- Delt_ds[[k]]
         gams <- (1/(2*n)) * (d + sqrt(d^2 + 8*n*lamDs[k]))
@@ -196,9 +196,9 @@ RMNimpute_iPCA <- function(x, lamS, lamDs, q, cov.init, xhat.init, Mhat.init,
         Delthats[[k]] <- Delt_Vs[[k]] %*% diag(gams) %*% t(Delt_Vs[[k]])
       }
     }else if (q == "multfrob") {
-      Delt_eigs <- mclapply(X = inD, FUN = eigen, mc.cores = n_cores)
-      Delt_Vs <- mclapply(X = Delt_eigs, FUN = function(X) {return(X$vectors)}, mc.cores = n_cores)
-      Delt_ds <- mclapply(X = Delt_eigs, FUN = function(X) {return(X$values)}, mc.cores = n_cores)
+      Delt_eigs <- lapply(X = inD, FUN = eigen)
+      Delt_Vs <- lapply(X = Delt_eigs, FUN = function(X) {return(X$vectors)})
+      Delt_ds <- lapply(X = Delt_eigs, FUN = function(X) {return(X$values)})
       for (k in 1:K) {
         d <- Delt_ds[[k]]
         gams <- (1/(2*n)) * (d + sqrt(d^2 + 8*n*lamDs[k]*norm(Sigihat, "F")^2))
@@ -212,6 +212,7 @@ RMNimpute_iPCA <- function(x, lamS, lamDs, q, cov.init, xhat.init, Mhat.init,
     if (trace) {
       cat("Computing loglike... ")
       like[like_idx] <- MNloglike_iPCA(Xs = x, Ms = Mhat, Sig = Sighat, Delts = Delthats, lamS = lamS, lamDs = lamDs, q = q, print = T)
+      like2[like_idx] <- MNloglike_iPCA(Xs = xhat, Ms = Mhat, Sig = Sighat, Delts = Delthats, lamS = lamS, lamDs = lamDs, q = q, print = T)
       like_idx <- like_idx + 1
     }
     
@@ -223,5 +224,5 @@ RMNimpute_iPCA <- function(x, lamS, lamDs, q, cov.init, xhat.init, Mhat.init,
   
   }
   
-  return(list(xhat=xhat,Sigma=Sighat,Delta=Delthats,M=Mhat,loglike=like))
+  return(list(xhat=xhat,Sigma=Sighat,Delta=Delthats,M=Mhat,loglike=like,loglike2=like2))
 }

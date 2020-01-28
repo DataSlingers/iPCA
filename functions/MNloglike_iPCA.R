@@ -18,7 +18,6 @@ MNloglike_iPCA <- function(Xs,Ms,Sig,Delts,lamS,lamDs,q,Sigi=NULL,Deltis=NULL,pr
   #  -val: value of the iPCA log-likelihood
   
   K <- length(Xs)
-  n_cores <- K
   
   # record dimensions
   n <- nrow(Xs[[1]])
@@ -27,7 +26,7 @@ MNloglike_iPCA <- function(Xs,Ms,Sig,Delts,lamS,lamDs,q,Sigi=NULL,Deltis=NULL,pr
   
   # fill in missing function parameters
   if (length(Sigi)==0){ Sigi <- solve(Sig) }
-  if (length(Deltis)==0){ Deltis <- mclapply(X = Delts, FUN = function(X) {chol2inv(chol(X))}, mc.cores = n_cores) } # invert Delts 
+  if (length(Deltis)==0){ Deltis <- lapply(X = Delts, FUN = function(X) {chol2inv(chol(X))}) } # invert Delts
   
   # center matrix
   if (missing(Ms)) {
@@ -39,29 +38,29 @@ MNloglike_iPCA <- function(Xs,Ms,Sig,Delts,lamS,lamDs,q,Sigi=NULL,Deltis=NULL,pr
   
   # compute penalty terms
   if (q == 1) {
-    pen <- lamS*sum(abs(Sigi)) + sum(lamDs * mcmapply(X = Deltis, 
+    pen <- lamS*sum(abs(Sigi)) + sum(lamDs * mapply(X = Deltis,
                                                       FUN = function(X) {return(sum(abs(X)))}, 
-                                                      SIMPLIFY = TRUE, mc.cores = n_cores))
+                                                      SIMPLIFY = TRUE))
   }else if (q == "addfrob") {
-    pen <- lamS*sum(Sigi^2) + sum(lamDs * mcmapply(X = Deltis, 
+    pen <- lamS*sum(Sigi^2) + sum(lamDs * mapply(X = Deltis,
                                                    FUN = function(X) {return(sum(X^2))}, 
-                                                   SIMPLIFY = TRUE, mc.cores = n_cores))
+                                                   SIMPLIFY = TRUE))
   }else if (q == "multfrob") {
-    pen <- sum(Sigi^2) * sum(lamDs * mcmapply(X = Deltis, 
+    pen <- sum(Sigi^2) * sum(lamDs * mapply(X = Deltis,
                                               FUN = function(X) {return(sum(X^2))}, 
-                                              SIMPLIFY = TRUE, mc.cores = n_cores))
+                                              SIMPLIFY = TRUE))
   }else {
     stop("q must be either 1, addfrob, or multfrob.")
   }
   
   if (sum(mapply(Xs, FUN = function(X) {return(sum(is.na(X)))})) == 0) { # if no missing data
     t1 <- determinant(Sigi, logarithm = T)$modulus
-    t2 <- mcmapply(X = Deltis,
+    t2 <- mapply(X = Deltis,
                    FUN = function(X) {return(determinant(X, logarithm = T)$modulus)},
-                   SIMPLIFY = TRUE, mc.cores = n_cores)
-    t3 <- mcmapply(X = Xc, D = Deltis, 
+                   SIMPLIFY = TRUE)
+    t3 <- mapply(X = Xc, D = Deltis,
                    FUN = function(X,D) {return(sum(diag(Sigi %*% X %*% D %*% t(X))))},
-                   SIMPLIFY = TRUE, mc.cores = n_cores)
+                   SIMPLIFY = TRUE)
     val <- p*t1 + n*sum(t2) - sum(t3) - pen
     
   }else {

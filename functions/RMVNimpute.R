@@ -49,6 +49,18 @@ RMVNimpute <- function(x,rho,cov.corr=TRUE,q,ed1,
     Sigihat <- quic_res$X
     Sighat <- quic_res$W
     ed1 <- NULL
+  }else if (q == "corr1_off"){
+    cat(paste0('Glasso Iteration: ', iter, '\n'))
+    tmp_p <- nrow(Sighat)
+    rho_off <- rho/n * (matrix(1, nrow = tmp_p, ncol = tmp_p) - diag(tmp_p))
+    Sighat <- Sighat/n
+    sd <- diag(sqrt(diag(Sighat)))
+    Corrhat <- solve(sd) %*% Sighat %*% solve(sd)
+    quic_res <- QUIC(S = Corrhat, rho = rho_off, tol = thr.glasso, msg = 0, maxIter = maxit.glasso, 
+                     X.init = diag(p), W.init = diag(p))
+    Sigihat <- solve(sd) %*% quic_res$X %*% solve(sd)
+    Sighat <- sd %*% quic_res$W %*% sd
+    ed1 <- NULL
   }else if (q == "addfrob"){
     if (missing(ed1)) {ed1 <- eigen(Sighat)}
     theta <- (ed1$values + sqrt(ed1$values^2 + 8*n*rho))/(2*n)
@@ -110,6 +122,17 @@ RMVNimpute <- function(x,rho,cov.corr=TRUE,q,ed1,
                        X.init = Sigihat, W.init = Sighat)
       Sigihat <- quic_res$X
       Sighat <- quic_res$W
+    }else if (q == "corr1_off"){
+      cat(paste0('Glasso Iteration: ', iter, '\n'))
+      tmp_p <- nrow(Sighat)
+      rho_off <- rho/n * (matrix(1, nrow = tmp_p, ncol = tmp_p) - diag(tmp_p))
+      Sighat <- Sighat/n
+      sd <- diag(sqrt(diag(Sighat)))
+      Corrhat <- solve(sd) %*% Sighat %*% solve(sd)
+      quic_res <- QUIC(S = Corrhat, rho = rho_off, tol = thr.glasso, msg = 0, maxIter = maxit.glasso, 
+                       X.init = diag(p), W.init = diag(p))
+      Sigihat <- solve(sd) %*% quic_res$X %*% solve(sd)
+      Sighat <- sd %*% quic_res$W %*% sd
     }else if (q == "addfrob"){
       ed <- eigen(Sighat)
       theta <- (ed$values + sqrt(ed$values^2 + 8*n*rho))/(2*n)

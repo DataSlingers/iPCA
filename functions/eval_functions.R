@@ -1,8 +1,9 @@
 ## metrics
 
-subspace_recovery <- function(Sig, Sigh, Uh, dim_U) {
+subspace_recovery <- function(Sig, Sigh, U, Uh, dim_U) {
   # Sig = true Sigma
   # Sigh = estimated Sigma
+  # U = true U (only required if Sig is missing)
   # Uh = estimated eigenvectors of Sigma (only required if Sigh is missing)
   # dim_U = dimension of true subspace of Sigma
   # must specify either Sigh or Uh
@@ -11,11 +12,15 @@ subspace_recovery <- function(Sig, Sigh, Uh, dim_U) {
     Sigh_eigs <- eigs(Sigh, dim_U, which = "LM")
     Uh <- Sigh_eigs$vectors # eigenvectors of Sigh
   }else {
-    Uh <- Uh[,1:dim_U]
+    Uh <- Uh[, 1:dim_U]
   }
   
-  Sig_eigs <- eigs(Sig, dim_U, which = "LM")
-  U <- Sig_eigs$vectors # truth
+  if (!missing(Sig)) {
+    Sig_eigs <- eigs(Sig, dim_U, which = "LM")
+    U <- Sig_eigs$vectors # truth
+  }else {
+    U <- U[, 1:dim_U]
+  }
   
   sr_metric <- base::norm(U %*% solve(t(U) %*% U) %*% t(U) - Uh %*% solve(t(Uh) %*% Uh) %*% t(Uh), "F")^2
   return(1/dim_U * sr_metric)

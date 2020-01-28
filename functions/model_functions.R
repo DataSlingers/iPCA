@@ -4,6 +4,7 @@ library(rARPACK) # eigs
 library(expm) # sqrtm
 library(rmutil) # rlaplace
 library(pracma)
+library(huge)
 
 # cov_types can be "base", "identity", or a vector of types
 
@@ -297,3 +298,298 @@ real_data_sim <- function(dat) { # for rosmap data
   
   return(Xsims) # return centered data
 }
+
+
+# ipca model with different row covariances
+ipca_model_diff_sigmas <- function(K = 3, dim_U = 2, n_clust = 3, diff_idx = 1,
+                                   n = 150, pks = c(300, 500, 400), pks_add = 0,
+                                   snr = 3, snr2 = 3, Dsig = n/snr, Dsig2 = n/snr2,
+                                   Dks = c(900, 4500, 2400), nsim) {
+  pks <- pks + pks_add
+  
+  Xsims <- list()
+  
+  for (sim in 1:nsim) {
+    
+    # simulate U (not necessarily orthogonal to begin with), Sigma, and ylabels (clustlabels)
+    sigu <- 1 # influences sd of u
+    if (dim_U == 2) {
+      U_all <- matrix(c(1, 5, 5, 3, 3, 1, -1, 2, 4, 7, 0, 8, 10, 3), ncol = 2, byrow = T) # cluster centers for 2d case
+      U_subspace <- U_all[1:n_clust, 1:dim_U] # get cluster centers
+    } else {
+      U_subspace <- matrix(sample(x = 1:10, size = n_clust * dim_U, replace = T),
+                           nrow = n_clust, ncol = dim_U
+      )
+    }
+    
+    # simulate Sigma and Sigma2
+    uu <- do.call(rbind, replicate(ceiling(n / n_clust), U_subspace, simplify = FALSE))
+    uu <- uu[1:n, ] + matrix(rnorm(n * dim_U, 0, 1), nrow = n, ncol = dim_U) * sigu
+    uu <- scale(uu, center = F, scale = sqrt(colSums(uu^2))) # normalize columns to norm 1
+    y <- rep(1:n_clust, times = ceiling(n / n_clust))
+    y <- y[1:n] # set cluster labels
+    tt <- diag(n)
+    UU <- cbind(uu, tt[, (dim_U + 1):n])
+    Dtrue <- c(Dsig, Dsig * .5, Dsig * .4, Dsig * .25, Dsig * .15)
+    Duu <- diag(c(Dtrue[1:dim_U], rep(1, n - dim_U)))
+    UU2 <- gramSchmidt(matrix(rnorm(n^2), nrow = n, ncol = n))$Q
+    Dtrue2 <- c(Dsig2, Dsig2 * .5, Dsig2 * .4, Dsig2 * .25, Dsig2 * .15)
+    Duu2 <- diag(c(Dtrue2[1:dim_U], rep(1, n - dim_U)))
+    
+    # simulate Sigma1
+    Sig <- UU %*% Duu %*% t(UU)
+    Sig <- 1 / 2 * (Sig + t(Sig))
+    Sig_eigs <- eigen(Sig)
+    Sig <- Sig_eigs$vectors %*% diag(c(Dtrue[1:dim_U], rep(1, n - dim_U))) %*% t(Sig_eigs$vectors) # to have control over the eigenvalues/signal
+    Sig <- 1 / 2 * (Sig + t(Sig))
+    Sig_eigs <- eigs(Sig, dim_U, "LM") # want true orthogonal components
+    d <- Sig_eigs$values
+    U <- Sig_eigs$vectors
+    ordered <- sort(x = d, decreasing = T, index.return = T)
+    Du <- diag(ordered$x)
+    U <- U[, ordered$ix] # order eigenstuff
+    
+    # simulate Sigma2
+    Sig2 <- UU2 %*% Duu2 %*% t(UU2)
+    Sig2 <- 1 / 2 * (Sig2 + t(Sig2))
+    Sig2_eigs <- eigen(Sig2)
+    Sig2 <- Sig2_eigs$vectors %*% diag(c(Dtrue2[1:dim_U], rep(1, n - dim_U))) %*% t(Sig2_eigs$vectors) # to have control over the eigenvalues/signal
+    Sig2 <- 1 / 2 * (Sig2 + t(Sig2))
+    Sig2_eigs <- eigs(Sig2, dim_U, "LM") # want true orthogonal components
+    d2 <- Sig2_eigs$values
+    U2 <- Sig2_eigs$vectors
+    ordered2 <- sort(x = d2, decreasing = T, index.return = T)
+    Du2 <- diag(ordered2$x)
+    U2 <- U2[, ordered2$ix] # order eigenstuff
+    
+    # simulate Delta_ks
+    Deltks <- list()
+    
+    # toeplitz
+    Deltx <- my_toeplitz(.9, pks[1])
+    Delt_eigs <- eigen(Deltx)
+    aa <- Delt_eigs$vectors
+    dd <- Delt_eigs$values
+    Deltks[[1]] <- aa %*% diag(dd * Dks[1] / max(dd)) %*% t(aa) # incorporate snr
+    
+    # real data cov
+    dat <- log(read.csv("../data/TCGA_ov_mirna.csv", header = F))
+    Delty <- my_realcov(dat, 25, pks[2])
+    Delt_eigs <- eigen(Delty)
+    aa <- Delt_eigs$vectors
+    dd <- Delt_eigs$values
+    Deltks[[2]] <- aa %*% diag(dd * Dks[2] / max(dd)) %*% t(aa) # incorporate snr
+    
+    # block diagonal
+    Deltz <- my_blkdiag(5, c(.6, .4, .6, .2, .8), pks[3])
+    Delt_eigs <- eigen(Deltz)
+    aa <- Delt_eigs$vectors
+    dd <- Delt_eigs$values
+    Deltks[[3]] <- aa %*% diag(dd * Dks[3] / max(dd)) %*% t(aa) # incorporate snr
+    
+    # generate Xs
+    Xs <- list()
+    for (k in 1:K) {
+      # generate data from matrix normal dist
+      # Xs[[k]] <- sqrtm(Sig) %*% matrix(rnorm(n*pks[k],0,1), nrow = n, ncol = pks[k]) %*% sqrtm(as.matrix(Deltks[[k]])) # too slow
+      
+      if (k == diff_idx) {
+        Sig2_eig <- eigen(Sig2)
+        Sig2_V <- Sig2_eig$vectors
+        Sig2_D <- Sig2_eig$values
+        Sig_sqrt <- Sig2_V %*% sqrt(diag(Sig2_D)) %*% t(Sig2_V)
+      }else {
+        Sig_eig <- eigen(Sig)
+        Sig_V <- Sig_eig$vectors
+        Sig_D <- Sig_eig$values
+        Sig_sqrt <- Sig_V %*% sqrt(diag(Sig_D)) %*% t(Sig_V)
+      }
+      
+      Delt_eig <- eigen(Deltks[[k]])
+      Delt_V <- Delt_eig$vectors
+      Delt_D <- Delt_eig$values
+      Delt_sqrt <- Delt_V %*% sqrt(diag(Delt_D)) %*% t(Delt_V)
+      
+      Xs[[k]] <- Sig_sqrt %*% matrix(rnorm(n * pks[k], 0, 1), nrow = n, ncol = pks[k]) %*% Delt_sqrt
+      
+      # center and scale data
+      # Xs[[k]] <- scale(Xs[[k]], center = T, scale = T)
+      
+      # center data (don't scale)
+      Xs[[k]] <- scale(Xs[[k]], center = T, scale = F)
+    }
+    
+    truth <- list(Sig_true = Sig, Deltks_true = Deltks,
+                  y_true = as.factor(y), Sig2_true = Sig2)
+    
+    Xsims[[sim]] <- list(sim_data = Xs, truth = truth)
+  }
+  
+  return(Xsims)
+}
+
+
+# generate data according to CMF model: UV' + E
+cmf_model <- function(K = 3, dim_U = 2, n_clust = 3, noise = 1,
+                      n = 150, pks = c(300, 500, 400), pks_add = 0,
+                      snr = 3, Dsig = n / snr, Dks = c(1, 2, 1.5), # Dks so that Xks are on different scales
+                      nsim) {
+  
+  pks <- pks + pks_add
+  
+  Xsims <- list()
+  
+  for (sim in 1:nsim) {
+    # simulate U (not necessarily orthogonal to begin with), Sigma, and ylabels (clustlabels)
+    sigu <- 1 # influences sd of u
+    if (dim_U == 2) {
+      U_all <- matrix(c(1, 5, 5, 3, 3, 1, -1, 2, 4, 7, 0, 8, 10, 3), ncol = 2, byrow = T) # cluster centers for 2d case
+      U_subspace <- U_all[1:n_clust, 1:dim_U] # get cluster centers
+    } else {
+      U_subspace <- matrix(sample(x = 1:10, size = n_clust * dim_U, replace = T),
+                           nrow = n_clust, ncol = dim_U
+      )
+    }
+    
+    # simulate U
+    uu <- do.call(rbind, replicate(ceiling(n / n_clust), U_subspace, simplify = FALSE))
+    uu <- uu[1:n, ] + matrix(rnorm(n * dim_U, 0, 1), nrow = n, ncol = dim_U) * sigu
+    UU <- scale(uu, center = F, scale = sqrt(colSums(uu^2))) # normalize columns to norm 1
+    Dtrue <- c(Dsig, Dsig * .5, Dsig * .4, Dsig * .25, Dsig * .15)
+    Duu <- diag(Dtrue[1:dim_U])
+    U <- UU %*% Duu # add in snr
+    
+    # simulate Vks
+    Vks <- list()
+    
+    # toeplitz
+    Deltx <- my_toeplitz(.9, pks[1])
+    Delt_eigs <- eigen(Deltx)
+    aa <- Delt_eigs$vectors
+    dd <- Delt_eigs$values
+    Vks[[1]] <- aa[, 1:dim_U] %*% diag(dd[1:dim_U] * Dks[1] / max(dd))
+    
+    # real data cov
+    dat <- log(read.csv("../data/TCGA_ov_mirna.csv", header = F))
+    Delty <- my_realcov(dat, 25, pks[2])
+    Delt_eigs <- eigen(Delty)
+    aa <- Delt_eigs$vectors
+    Vks[[2]] <- aa[, 1:dim_U] %*% diag(dd[1:dim_U] * Dks[2] / max(dd))
+    
+    # block diagonal
+    Deltz <- my_blkdiag(5, c(.6, .4, .6, .2, .8), pks[3])
+    Delt_eigs <- eigen(Deltz)
+    aa <- Delt_eigs$vectors
+    Vks[[3]] <- aa[, 1:dim_U] %*% diag(dd[1:dim_U] * Dks[3] / max(dd))
+    
+    # generate Xs
+    Xs <- list()
+    for (k in 1:K) {
+      # generate data from CMF Model: UV' + err
+      Xs[[k]] <- U %*% t(Vks[[k]]) + 
+        matrix(rnorm(n * pks[k], sd = noise), nrow = n, ncol = pks[k])
+      
+      # center data (don't scale)
+      Xs[[k]] <- scale(Xs[[k]], center = T, scale = F)
+    }
+    
+    truth <- list(U_true = U, Vks_true = Vks)
+    
+    Xsims[[sim]] <- list(sim_data = Xs, truth = truth)
+  }
+  
+  return(Xsims) # return centered data
+}
+
+# ipca model with sparse sigma and sparse delta_ks
+sparse_ipca_model <- function(K = 2, dim_U = 2, n_blks_Sig = 2, n_band = 4, n_blks_Delt = 5,
+                              n = 50, pks = c(50, 100), pks_add = 0, # small sims
+                              snr = 3, Dsig = n/snr, Dks = c(n/snr*2, n/snr*4),
+                              nsim) {
+  pks <- pks + pks_add
+  
+  Xsims <- list()
+  
+  for (sim in 1:nsim) {
+    
+    if (dim_U == 2) {
+      rhos <- c(.9, .6, rep(.1, length = n_blks_Sig - dim_U))
+    } else {
+      stop("dim_U != 2 not implemented yet.")
+    }
+    
+    # simulate Sigma
+    Sig <- my_blkdiag(n_blks = n_blks_Sig, rhos = rhos, p = n) %>% as.matrix()
+    uu <- eigen(Sig)$vectors
+    dd <- eigen(Sig)$values
+    dmax <- dd[1] * Dsig / max(dd)
+    Sig <- uu %*% diag(c(dmax, dmax * .5, 
+                         rep(1, n-dim_U))) %*% t(uu)
+    # Sig <- Dsig / maxd  * Sig
+    Sig <- 1 / 2 * (Sig + Sig) # ensure symmetry
+    
+    # want true orthogonal components
+    Sig_eigs <- eigs(Sig, dim_U, "LM")
+    d <- Sig_eigs$values
+    U <- Sig_eigs$vectors
+    ordered <- sort(x = d, decreasing = T, index.return = T)
+    Du <- diag(ordered$x)
+    U <- U[, ordered$ix] # order eigenstuff
+    
+    # simulate Delta_ks
+    Deltks <- list()
+    
+    # banded toeplitz
+    Deltx <- huge.generator(n = n, d = pks[1], verbose = F,
+                            graph = "band", g = n_band)$sigma
+    Delt_eigs <- eigen(Deltx)
+    aa <- Delt_eigs$vectors
+    dd <- Delt_eigs$values
+    Deltks[[1]] <- aa %*% diag(dd * Dks[1] / max(dd)) %*% t(aa) # incorporate snr
+    
+    # real data cov
+    dat <- log(read.csv("../data/TCGA_ov_mirna.csv", header = F))
+    Delty <- my_realcov(dat, 25, pks[2])
+    blocks <- list()
+    for (i in 1:n_blks_Delt) {
+      idx1 <- (i - 1) * (pks[2] / n_blks_Delt) + 1
+      idx2 <- min(i * (pks[2] / n_blks_Delt), pks[2])
+      blocks[[i]] <- Delty[(idx1:idx2), (idx1:idx2)]
+    }
+    Delty <- bdiag(blocks)
+    Delt_eigs <- eigen(Delty)
+    aa <- Delt_eigs$vectors
+    dd <- Delt_eigs$values
+    Deltks[[2]] <- aa %*% diag(dd * Dks[2] / max(dd)) %*% t(aa) # incorporate snr
+    
+    # generate Xs
+    Xs <- list()
+    for (k in 1:K) {
+      
+      # compute Sig^(1/2)
+      Sig_eig <- eigen(Sig)
+      Sig_V <- Sig_eig$vectors
+      Sig_D <- Sig_eig$values
+      Sig_sqrt <- Sig_V %*% sqrt(diag(Sig_D)) %*% t(Sig_V)
+      
+      # compute Deltak^(1/2)
+      Delt_eig <- eigen(Deltks[[k]])
+      Delt_V <- Delt_eig$vectors
+      Delt_D <- Delt_eig$values
+      Delt_sqrt <- Delt_V %*% sqrt(diag(Delt_D)) %*% t(Delt_V)
+      
+      # Xk = Sig^(1/2) * normal_matrix %*% Deltak^(1/2)
+      Xs[[k]] <- Sig_sqrt %*% matrix(rnorm(n * pks[k], 0, 1), nrow = n, ncol = pks[k]) %*% Delt_sqrt
+      
+      # center data (don't scale)
+      Xs[[k]] <- scale(Xs[[k]], center = T, scale = F)
+    }
+    
+    truth <- list(Sig_true = Sig, Deltks_true = Deltks)
+    
+    Xsims[[sim]] <- list(sim_data = Xs, truth = truth)
+  }
+  
+  return(Xsims) # return centered data
+}
+

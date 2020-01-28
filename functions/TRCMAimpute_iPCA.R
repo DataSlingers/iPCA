@@ -1,5 +1,3 @@
-library(parallel)
-
 TRCMAimpute_iPCA <- function(x, lamS = NULL, lamDs, q = "multfrob", rmvn.ed1s,
                              seed=1, maxit=50, trace=FALSE, 
                              thr.em=1e-6, thr.glasso=1e-2, maxit.glasso=1) {
@@ -35,7 +33,6 @@ TRCMAimpute_iPCA <- function(x, lamS = NULL, lamDs, q = "multfrob", rmvn.ed1s,
   pks <- sapply(x, FUN = ncol)
   p <- sum(pks)
   K <- length(x)
-  n_cores <- min(K,3)
   
   set.seed(seed)
   
@@ -54,26 +51,31 @@ TRCMAimpute_iPCA <- function(x, lamS = NULL, lamDs, q = "multfrob", rmvn.ed1s,
 #       rmvn.ans[[k]] <- RMVNimpute(x=x[[k]], rho=lamDs[k], q=q, trace=F,
 #                                   maxit=maxit, thr.em=thr.em, maxit.glasso=maxit.glasso, thr.glasso=thr.glasso)
 #     }
-    rmvn.ans <- mcmapply(X = x, D = lamDs,
+    rmvn.ans <- mapply(X = x, D = lamDs,
                          FUN = function(X,D) {return(RMVNimpute(X,D,q=q,trace=F,maxit=maxit,thr.em=thr.em,maxit.glasso=25,thr.glasso=thr.glasso))},
-                         SIMPLIFY = FALSE,
-                         mc.cores = n_cores)
+                         SIMPLIFY = FALSE)
     xinit <- lapply(X = rmvn.ans, FUN = function(X) {return(X$xhat)})
     Delthats <- Deltinits <- lapply(X = rmvn.ans, FUN = function(X) {return(X$Sig)})
     rmvn.ed1s <- lapply(X = rmvn.ans, FUN = function(X) {return(X$rmvn.ed1)})
   }else {
-    xinit <- mcmapply(X = x, D = lamDs, E = rmvn.ed1s,
+#     for (k in 1:K) {
+#       cat(paste0("... for k = ",k, "\n"))
+#       xinit[[k]] <- RMVNimpute(x=x[[k]], rho=lamDs[k], q=q, ed1=rmvn.ed1s[[k]], trace=F,
+#                                maxit=maxit, thr.em=thr.em, maxit.glasso=maxit.glasso, thr.glasso=thr.glasso)
+#     }
+    xinit <- mapply(X = x, D = lamDs, E = rmvn.ed1s,
                       FUN = function(X,D,E) {return(RMVNimpute(X,D,q=q,ed1=E,trace=F,maxit=maxit,thr.em=thr.em,maxit.glasso=25,thr.glasso=thr.glasso)$xhat)},
-                      SIMPLIFY = FALSE,
-                      mc.cores = n_cores)
+                      SIMPLIFY = FALSE)
     Delthats <- Deltinits <- lapply(X = rmvn.ans, FUN = function(X) {return(X$Sig)})
   }
   
   xhat <- xinit
   like <- NA
+  like2 <- NA
   like_idx <- 1
   if (trace) {
     like[like_idx] <- MNloglike_iPCA(Xs = x, Ms = Mhatinit, Sig = diag(n), Delts = Delthats, lamS = lamS, lamDs = lamDs, q = q, print = T)
+    like2[like_idx] <- MNloglike_iPCA(Xs = xhat, Ms = Mhatinit, Sig = diag(n), Delts = Delthats, lamS = lamS, lamDs = lamDs, q = q, print = T)
     like_idx <- like_idx + 1
   }
   
@@ -84,9 +86,11 @@ TRCMAimpute_iPCA <- function(x, lamS = NULL, lamDs, q = "multfrob", rmvn.ed1s,
   Mhat <- lapply(muhat, FUN = function(X) {return(matrix(rep(X, times = n), nrow = n, byrow = T))})
   
   if (q == 1) {
-    ans <- FFmleGlasso(dat = xc, lamDs = lamDs, lamS = lamS, maxit = maxit.glasso, thr = thr.glasso, parallel = T)
+    ans <- FFmleGlasso(dat = xc, lamDs = lamDs, lamS = lamS, maxit = maxit.glasso, thr = thr.glasso)
   }else if (q == "1_off") {
-    ans <- FFmleGlasso(dat = xc, lamDs = lamDs, lamS = lamS, maxit = maxit.glasso, thr = thr.glasso, parallel = T, pen_diag = F)
+    ans <- FFmleGlasso(dat = xc, lamDs = lamDs, lamS = lamS, maxit = maxit.glasso, thr = thr.glasso, pen_diag = F)
+  }else if (q == "corr1_off"){
+    ans <- FFmleGlassoCorrelation(dat = xc, lamDs = lamDs, lamS = lamS, maxit = maxit.glasso, thr = thr.glasso, pen_diag = F)
   }else if (q == "addfrob") {
     ans <- FFmleAddFrob(dat = xc, lamDs = lamDs, lamS = lamS)
   }else if (q == "multfrob") {
@@ -101,7 +105,49 @@ TRCMAimpute_iPCA <- function(x, lamS = NULL, lamDs, q = "multfrob", rmvn.ed1s,
   # given MLEs for covariances, impute X using ECM algorithm from GA's paper
   cat("Running ECM Algorithm... \n")
 
-  xhat <- mcmapply(X = x, pk = as.list(pks), xhatk = xhat, Delthatk = Delthats, Mhatk = Mhat, SIMPLIFY = F, mc.cores = n_cores,
+#   for (k in 1:K) {
+#     X <- x[[k]]
+#     pk <- pks[k]
+#     xhatk <- xhat[[k]]
+#     Delthatk <- Delthats[[k]]
+#     Mhatk <- Mhat[[k]]
+#     
+#     ind <- 1; iter <- 1
+#     rmi <- (1:n)[apply(is.na(X),1,sum)>0] # indices of rows with missing values
+#     cmj <- (1:pk)[apply(is.na(X),2,sum)>0] # indices of columns with missing values
+#     na_idx <- is.na(X)
+#     
+#     while (ind > thr.em & iter < maxit) { # same algorithm as GA but specialized to the case where nu = 0
+#       oldx <- xhatk
+#       oldxc <- scale(oldx, center = T, scale = F)
+#       
+#       #by rows
+#       for(i in rmi) {
+#         mi <- na_idx[i,]
+#         sinvs <- t(solve(Sighat[-i,-i], Sighat[-i,i]))
+#         psi <- Mhatk[i,] + sinvs %*% (xhatk[-i,] - Mhatk[-i,])
+#         Gam <- (Sighat[i,i] - sinvs %*% Sighat[-i,i]) %x% Delthatk
+#         ginvg <- t(solve(Gam[!mi,!mi], Gam[!mi,mi]))
+#         xhatk[i,mi] <- psi[mi] + ginvg %*% (xhatk[i,!mi] - psi[!mi])
+#       }
+#       
+#       #by cols
+#       for(j in cmj) {
+#         mj <- na_idx[,j] # T/F: missing or not
+#         invdd <- solve(Delthatk[-j,-j], Delthatk[-j,j])
+#         nu <- Mhatk[,j] + (xhatk[,-j] - Mhatk[,-j]) %*% invdd
+#         Phi <- Sighat %x% (Delthatk[j,j] - Delthatk[j,-j] %*% invdd)
+#         pinvp <- t(solve(Phi[!mj,!mj], Phi[!mj,mj]))
+#         xhatk[mj,j] <- nu[mj] + pinvp %*% (xhatk[!mj,j] - nu[!mj])
+#       }
+#       
+#       ind <- sum((oldx[na_idx] - xhatk[na_idx])^2)/sum(oldxc[na_idx]^2)
+#       iter <- iter + 1
+#     }
+#     xhat[[k]] <- xhatk
+#   }
+
+  xhat <- mapply(X = x, pk = as.list(pks), xhatk = xhat, Delthatk = Delthats, Mhatk = Mhat, SIMPLIFY = F,
                    FUN = function(X, pk, xhatk, Delthatk, Mhatk) {
                      ind <- 1; iter <- 1
                      rmi <- (1:n)[apply(is.na(X),1,sum)>0] # indices of rows with missing values
@@ -140,11 +186,12 @@ TRCMAimpute_iPCA <- function(x, lamS = NULL, lamDs, q = "multfrob", rmvn.ed1s,
   
   if (trace) {
     like[like_idx] <- MNloglike_iPCA(Xs = x, Ms = Mhat, Sig = Sighat, Delts = Delthats, lamS = lamS, lamDs = lamDs, q = q, print = T)
+    like2[like_idx] <- MNloglike_iPCA(Xs = xhat, Ms = Mhat, Sig = Sighat, Delts = Delthats, lamS = lamS, lamDs = lamDs, q = q, print = T)
     like_idx <- like_idx + 1
   }
   
   return(list(xhat = xhat, xh.init = xinit, M.init = Mhatinit,
               Sigma.init = Siginit, Delta.init = Deltinits,
               Sigma = Sighat, Delta = Delthats,M = Mhat,
-              loglike = like, rmvn.ed1s = rmvn.ed1s))
+              loglike = like, loglike2 = like2, rmvn.ed1s = rmvn.ed1s))
 }

@@ -1,7 +1,6 @@
 library(reshape2)
 library(RColorBrewer)
 library(R.matlab)
-library(simulator)
 library(randomForest)
 library(R.utils)
 library(plotly)
@@ -9,7 +8,7 @@ library(plotly)
 library(foreach)
 library(doParallel)
 
-sourceDirectory("../funs/", modifiedOnly = F, recursive = F) # useful functions
+sourceDirectory("../functions/", modifiedOnly = F, recursive = F) # useful functions
 
 #### ####
 #### Illustrative Example ####

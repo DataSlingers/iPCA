@@ -1,5 +1,5 @@
-# FFmleGlasso: computes iPCA covariance estimates via Flip-Flop MLE
-# with additive Glasso penalty
+# FFmleGlassoCorrelation: computes iPCA covariance estimates via Flip-Flop MLE
+# with additive Glasso penalty (using correlations)
 #
 # inputs: (must supply either draw or dat)
 #   draw = list of 2 elements:
@@ -19,10 +19,10 @@
 
 library(QUIC)
 
-FFmleGlasso <- function(draw, dat, lamDs, lamS, 
-                        maxit = 10, thr = 1e-6, init,
-                        maxit.glasso = 50, thr.glasso = 1e-2,
-                        pen_diag = T) {
+FFmleGlassoCorrelation <- function(draw, dat, lamDs, lamS, 
+                                   maxit = 1, thr = 1e-3, init,
+                                   maxit.glasso = 250, thr.glasso = 1e-4,
+                                   pen_diag = F) {
   
   if (!(missing(dat))) {
     Xs <- dat
@@ -56,22 +56,24 @@ FFmleGlasso <- function(draw, dat, lamDs, lamS,
   
   if (K/sqrt(n) >= sum(sqrt(pks))/p) {
     # if in the large p scenario, estimate sig first
-    inS <- Reduce("+", mapply(X = Xs, D = Deltis,
-                                FUN = function(X, D) {return(X %*% D %*% t(X))},
-                                SIMPLIFY = FALSE))
-    inS <- 1/(2*p) * (inS + t(inS)) # to ensure symmetry
+    Shat_Sig <- Reduce("+", mapply(X = Xs, D = Deltis,
+                                   FUN = function(X, D) {return(X %*% D %*% t(X))},
+                                   SIMPLIFY = FALSE))
+    Shat_Sig <- 1/(2*p) * (Shat_Sig + t(Shat_Sig)) # to ensure symmetry
+    SD_Sig <- diag(sqrt(diag(Shat_Sig)))
+    Sphat_Sig <- solve(SD_Sig) %*% Shat_Sig %*% solve(SD_Sig)
     
     # cat(paste0('Glasso Iteration ', iter, ': Sigma \n'))
     if (pen_diag == T) {
-      quic_res <- QUIC(S = inS, rho = lamS/p, tol = thr.glasso, msg = 0, maxIter = maxit.glasso, 
+      quic_res <- QUIC(S = Shat_Sig, rho = lamS/p, tol = thr.glasso, msg = 0, maxIter = maxit.glasso, 
                        X.init = Sigi, W.init = Sig)
     }else {
       rho_off <- lamS/p * (matrix(1, nrow = n, ncol = n) - diag(n))
-      quic_res <- QUIC(S = inS, rho = rho_off, tol = thr.glasso, msg = 0, maxIter = maxit.glasso, 
+      quic_res <- QUIC(S = Shat_Sig, rho = rho_off, tol = thr.glasso, msg = 0, maxIter = maxit.glasso, 
                        X.init = Sigi, W.init = Sig)
     }
-    Sigi <- quic_res$X
-    Sig <- quic_res$W
+    Sigi <- solve(SD_Sig) %*% quic_res$X %*% solve(SD_Sig)
+    Sig <- SD_Sig %*% quic_res$W %*% SD_Sig
     
     # to ensure symmetry
     Sigi <- 1/2 * (Sigi + t(Sigi))
@@ -83,46 +85,59 @@ FFmleGlasso <- function(draw, dat, lamDs, lamS,
     oldS <- Sigi
     
     # update Deltks
-    inD <- lapply(X = Xs,
-                    FUN = function(X) {return(t(X) %*% Sigi %*% X)})
-    inD <- lapply(X = inD,
-                    FUN = function(X) {return(1/(2*n) * (X + t(X)))}) # to ensure symmetry
+    Shat_ks <- lapply(X = Xs,
+                      FUN = function(X) {
+                        Shat_k <- 1/n * t(X) %*% Sigi %*% X
+                        Shat_k <- 1/2 * (Shat_k + t(Shat_k)) # to ensure symmetry
+                        return(Shat_k)
+                      })
+    SD_ks <- lapply(X = Shat_ks,
+                    FUN = function(X) {
+                      return(diag(sqrt(diag(X))))
+                    })
+    Sphat_ks <- mapply(X = Shat_ks, W = SD_ks,
+                       FUN = function(X, W) {
+                         return(solve(W) %*% X %*% solve(W))
+                       },
+                       SIMPLIFY = F)
     
-      for (k in 1:K) {
-        # cat(paste0('Glasso Iteration ', iter, ': Delta', k, '\n'))
-        if (pen_diag == T) {
-          quic_res <- QUIC(S = inD[[k]], rho = lamDs[k]/n, tol = thr.glasso, msg = 0, maxIter = maxit.glasso,
-                           X.init = Deltis[[k]], W.init = Delts[[k]])
-        }else {
-          pk <- nrow(inD[[k]])
-          rho_off <- lamDs[k]/n * (matrix(1, nrow = pk, ncol = pk) - diag(pk))
-          quic_res <- QUIC(S = inD[[k]], rho = rho_off, tol = thr.glasso, msg = 0, maxIter = maxit.glasso,
-                           X.init = Deltis[[k]], W.init = Delts[[k]])
-        }
-        Deltis[[k]] <- quic_res$X
-        Delts[[k]] <- quic_res$W
+    for (k in 1:K) {
+      # cat(paste0('Glasso Iteration ', iter, ': Delta', k, '\n'))
+      if (pen_diag == T) {
+        quic_res <- QUIC(S = Sphat_ks[[k]], rho = lamDs[k]/n, tol = thr.glasso, msg = 0, maxIter = maxit.glasso,
+                         X.init = Deltis[[k]], W.init = Delts[[k]])
+      }else {
+        pk <- pks[k]
+        rho_off <- lamDs[k]/n * (matrix(1, nrow = pk, ncol = pk) - diag(pk))
+        quic_res <- QUIC(S = Sphat_ks[[k]], rho = rho_off, tol = thr.glasso, msg = 0, maxIter = maxit.glasso,
+                         X.init = Deltis[[k]], W.init = Delts[[k]])
       }
-
+      Deltis[[k]] <- solve(SD_ks[[k]]) %*% quic_res$X %*% solve(SD_ks[[k]])
+      Delts[[k]] <- SD_ks[[k]] %*% quic_res$W %*% SD_ks[[k]]
+    }
+    
     Deltis <- lapply(X = Deltis, FUN = function(X) {return(1/2 * (X + t(X)))}) # to ensure symmetry
     Delts <- lapply(X = Delts, FUN = function(X) {return(1/2 * (X + t(X)))}) # to ensure symmetry
     
     # update Sig
-    inS <- Reduce("+", mapply(X = Xs, D = Deltis,
-                                FUN = function(X, D) {return(X %*% D %*% t(X))},
-                                SIMPLIFY = FALSE))
-    inS <- 1/(2*p) * (inS + t(inS)) # to ensure symmetry
+    Shat_Sig <- Reduce("+", mapply(X = Xs, D = Deltis,
+                                   FUN = function(X, D) {return(X %*% D %*% t(X))},
+                                   SIMPLIFY = FALSE))
+    Shat_Sig <- 1/(2*p) * (Shat_Sig + t(Shat_Sig)) # to ensure symmetry
+    SD_Sig <- diag(sqrt(diag(Shat_Sig)))
+    Sphat_Sig <- solve(SD_Sig) %*% Shat_Sig %*% solve(SD_Sig)
     
     # cat(paste0('Glasso Iteration ', iter, ': Sigma \n'))
     if (pen_diag == T) {
-      quic_res <- QUIC(S = inS, rho = lamS/p, tol = thr.glasso, msg = 0, maxIter = maxit.glasso, 
+      quic_res <- QUIC(S = Shat_Sig, rho = lamS/p, tol = thr.glasso, msg = 0, maxIter = maxit.glasso, 
                        X.init = Sigi, W.init = Sig)
     }else {
       rho_off <- lamS/p * (matrix(1, nrow = n, ncol = n) - diag(n))
-      quic_res <- QUIC(S = inS, rho = rho_off, tol = thr.glasso, msg = 0, maxIter = maxit.glasso, 
+      quic_res <- QUIC(S = Shat_Sig, rho = rho_off, tol = thr.glasso, msg = 0, maxIter = maxit.glasso, 
                        X.init = Sigi, W.init = Sig)
     }
-    Sigi <- quic_res$X
-    Sig <- quic_res$W
+    Sigi <- solve(SD_Sig) %*% quic_res$X %*% solve(SD_Sig)
+    Sig <- SD_Sig %*% quic_res$W %*% SD_Sig
     
     # to ensure symmetry
     Sigi <- 1/2 * (Sigi + t(Sigi))
