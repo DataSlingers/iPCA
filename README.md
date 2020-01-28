@@ -1,5 +1,5 @@
 # Integrated Principal Components Analysis (iPCA)
-iPCA is a generalization of the classicial Principal Components Analysis to the data integration setting, where we observe multiple datasets. This repository provides the code associated with Tiffany M. Tang, Genevera I. Allen "Integrated Principal Components Analysis" (2018+).
+iPCA is a generalization of the classicial Principal Components Analysis to the data integration setting, where we observe multiple datasets. This repository provides the code associated with Tiffany M. Tang, Genevera I. Allen "Integrated Principal Components Analysis" (2020+).
 
 ## Directory Structure
 
