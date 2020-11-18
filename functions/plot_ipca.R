@@ -17,6 +17,7 @@
 library(ggplot2)
 library(RColorBrewer)
 library(gridExtra)
+library(viridis)
 # see library(ggpubr) # http://www.sthda.com/english/wiki/ggplot2-scatter-plots-quick-start-guide-r-software-and-data-visualization
 
 plot_ipca <- function(Sig, U, y, plot_title, show_legend = F, point_size = 1, text_size = 12, show_plot = T, pcs) {
